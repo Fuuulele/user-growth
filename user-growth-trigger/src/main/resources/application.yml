@@ -3,21 +3,19 @@ server:
 
 spring:
   datasource:
-    url: jdbc:mysql://139.129.37.84:3306/test
+    url: jdbc:mysql://localhost:3306/user_growth?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
     username: root
-    password: BuDou&123
+    password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
   data:
     redis:
-      host: 139.129.37.84
+      host: localhost
       port: 6379
-      password: Yt526526
       database: 0
+  autoconfigure:
+    exclude: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
 
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-
-# 暂时关闭 RocketMQ 自动配置，等后续开发兑换模块再开启
-spring.autoconfigure.exclude: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
