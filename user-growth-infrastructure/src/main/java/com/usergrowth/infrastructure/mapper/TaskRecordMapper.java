@@ -33,4 +33,10 @@ public interface TaskRecordMapper extends BaseMapper<TaskRecordPO> {
             "WHERE user_id = #{userId} AND biz_date = #{bizDate}")
     List<Integer> selectCompletedTaskIds(@Param("userId") Long userId,
                                          @Param("bizDate") LocalDate bizDate);
+
+    /**
+     * 查询用户历史上完成过的任务ID列表（不限日期，用于一次性任务判断）
+     */
+    @Select("SELECT DISTINCT task_id FROM task_record WHERE user_id = #{userId}")
+    List<Integer> selectAllCompletedTaskIds(@Param("userId") Long userId);
 }
