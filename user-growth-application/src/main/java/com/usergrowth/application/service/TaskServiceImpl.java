@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -41,26 +42,36 @@ public class TaskServiceImpl implements TaskService {
                         .orderByAsc(TaskPO::getId)
         );
 
-        // 2. 查询用户今天已完成的任务ID集合
-        Set<Integer> completedIds = taskRecordMapper
-                .selectCompletedTaskIds(userId, LocalDate.now())
-                .stream()
-                .collect(Collectors.toSet());
+        // 2. 查询今天已完成的任务ID（用于 DAILY 任务判断）
+        Set<Integer> todayCompletedIds = new HashSet<>(
+                taskRecordMapper.selectCompletedTaskIds(userId, LocalDate.now())
+        );
 
-        // 3. 组装 VO，合并完成状态
+        // 3. 查询历史上完成过的任务ID（用于 DAILY 任务判断）
+        Set<Integer> allCompletedIds = new HashSet<>(
+                taskRecordMapper.selectAllCompletedTaskIds(userId)
+        );
+
+        // 4. 组装 VO，按任务类型合并完成状态
         return taskList.stream().map(task -> {
             TaskVO vo = new TaskVO();
             vo.setTaskID(task.getId());
             vo.setTaskName(task.getTaskName());
             vo.setPointsReward(task.getPointsReward());
             vo.setTaskType(task.getTaskType());
-            // 每日任务：今天已完成则标记 COMPLETED
-            // 一次性任务：完成过任何一天都算 COMPLETED
-            if (completedIds.contains(task.getId())) {
-                vo.setTaskStatus(TaskStatusEnum.COMPLETED.getCode());
+
+            if ("ONE_TIME".equals(task.getTaskType())) {
+                // 一次性任务：历史上完成过就标记 COMPLETED
+                vo.setTaskStatus(allCompletedIds.contains(task.getId())
+                        ? TaskStatusEnum.COMPLETED.getCode()
+                        : TaskStatusEnum.AVAILABLE.getCode());
             } else {
-                vo.setTaskStatus(TaskStatusEnum.AVAILABLE.getCode());
+                // 每日任务（DAILY）：只看今天
+                vo.setTaskStatus(todayCompletedIds.contains(task.getId())
+                        ? TaskStatusEnum.COMPLETED.getCode()
+                        : TaskStatusEnum.AVAILABLE.getCode());
             }
+
             return vo;
         }).collect(Collectors.toList());
     }
@@ -68,17 +79,28 @@ public class TaskServiceImpl implements TaskService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean completeTask(Long userId, Integer taskId, String targetId) {
-        // 1. 查询任务是否存在且启用
+        // 1. 查询任务
         TaskPO task = taskMapper.selectById(taskId);
         if (task == null || task.getStatus() != 1) {
             throw new RuntimeException("任务不存在或已禁用");
         }
 
-        // 2. 构建幂等 Key：MD5(userId_taskId_bizDate)
-        String bizDate = LocalDate.now().toString();
+        // 2. 一次性任务额外校验：历史上是否已完成过
+        if ("ONE_TIME".equals(task.getTaskType())) {
+            List<Integer> allCompleted = taskRecordMapper.selectAllCompletedTaskIds(userId);
+            if (allCompleted.contains(taskId)) {
+                log.info("一次性任务已完成，拒绝重复，userId={}, taskId={}", userId, taskId);
+                return true;
+            }
+        }
+
+        // 3. 构建幂等 Key
+        // ONE_TIME 任务不含日期，保证全局唯一
+        // DAILY 任务含日期，每天可完成一次
+        String bizDate = "ONE_TIME".equals(task.getTaskType()) ? "once" : LocalDate.now().toString();
         String idempotentKey = DigestUtil.md5Hex(userId + "_" + taskId + "_" + bizDate);
 
-        // 3. 幂等插入任务记录，INSERT IGNORE，重复返回 0
+        // 4. 幂等插入
         int rows = taskRecordMapper.insertIgnore(
                 userId, taskId,
                 targetId == null ? "" : targetId,
@@ -87,13 +109,12 @@ public class TaskServiceImpl implements TaskService {
                 idempotentKey
         );
 
-        // 4. rows == 0 说明已经完成过，直接返回 true（幂等）
         if (rows == 0) {
             log.info("任务已完成，幂等返回，userId={}, taskId={}", userId, taskId);
             return true;
         }
 
-        // 5. 发放积分：乐观锁重试，最多3次
+        // 5. 乐观锁发放积分
         boolean success = addPointsWithRetry(userId, task.getPointsReward(), 3);
         if (!success) {
             throw new RuntimeException("积分发放失败，请重试");
