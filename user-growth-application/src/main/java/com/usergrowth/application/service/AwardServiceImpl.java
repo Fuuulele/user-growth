@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.usergrowth.api.dto.AwardVO;
 import com.usergrowth.infrastructure.mapper.*;
 import com.usergrowth.infrastructure.po.*;
+import com.usergrowth.infrastructure.redis.AwardStockRedisService;
 import com.usergrowth.infrastructure.util.SnowflakeIdGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,7 @@ public class AwardServiceImpl implements AwardService {
     private final PointAccountMapper pointAccountMapper;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final AwardStockRedisService awardStockRedisService;
 
     @Override
     public List<AwardVO> getRewardList() {
@@ -64,7 +66,8 @@ public class AwardServiceImpl implements AwardService {
         }
 
         // 2. 校验活动有效期
-        if (award.getExpireTime() != null && LocalDateTime.now().isAfter(award.getExpireTime())) {
+        if (award.getExpireTime() != null
+                && LocalDateTime.now().isAfter(award.getExpireTime())) {
             throw new RuntimeException("活动已结束");
         }
 
@@ -74,7 +77,7 @@ public class AwardServiceImpl implements AwardService {
             throw new RuntimeException("积分不足");
         }
 
-        // 4. 生成幂等ID（雪花算法）
+        // 4. 生成兑换ID（雪花算法）
         long exchangeId = snowflakeIdGenerator.nextId();
 
         // 5. 写入兑换记录（状态=待处理）
@@ -87,36 +90,104 @@ public class AwardServiceImpl implements AwardService {
         record.setPointsCost(award.getPointsCost());
         exchangeRecordMapper.insert(record);
 
-        // 6. 扣减库存（乐观锁+随机路由，最多重试5次）
-        boolean stockDeducted = deductInventory(awardId, 5);
-        if (!stockDeducted) {
+        // 6. 根据是否允许超卖走不同路径
+        if (award.getAllowOversell() == 1) {
+            // ========== 允许超卖路径：Redis DECR ==========
+            return exchangeWithOversell(userId, awardId, award, exchangeId);
+        } else {
+            // ========== 不允许超卖路径：库存拆分 + 乐观锁 ==========
+            return exchangeWithoutOversell(userId, awardId, award, exchangeId);
+        }
+    }
+
+    /**
+     * 允许超卖场景：Redis DECR 扣减库存
+     * 优点：性能极高，无锁竞争
+     * 缺点：Redis 宕机或主从切换可能导致超卖
+     */
+    private boolean exchangeWithOversell(Long userId, Long awardId,
+                                         AwardPO award, Long exchangeId) {
+        // 1. Redis DECR 扣减库存
+        Long remaining = awardStockRedisService.decrStock(awardId);
+        if (remaining == null || remaining < 0) {
+            // 库存不足，回滚 Redis 库存
+            awardStockRedisService.incrStock(awardId);
+            // 更新兑换记录为失败
+            updateExchangeStatus(exchangeId, 2);
             throw new RuntimeException("库存不足，兑换失败");
         }
 
-        // 7. 扣减用户积分（乐观锁）
+        // 2. 数据库事务：扣减积分 + 发放奖品
         boolean pointsDeducted = deductPoints(userId, award.getPointsCost(), 3);
         if (!pointsDeducted) {
+            // 积分扣减失败，回滚 Redis 库存
+            awardStockRedisService.incrStock(awardId);
+            updateExchangeStatus(exchangeId, 2);
             throw new RuntimeException("积分扣减失败，请重试");
         }
 
-        // 8. 发放奖品
+        // 3. 发放奖品
         UserAwardPO userAward = new UserAwardPO();
         userAward.setUserId(userId);
         userAward.setAwardId(awardId);
         userAward.setExchangeId(exchangeId);
         userAwardMapper.insert(userAward);
 
-        // 9. 更新兑换记录状态为成功
+        // 4. 更新兑换记录为成功
+        updateExchangeStatus(exchangeId, 1);
+
+        // 5. 删除积分余额缓存
+        redisTemplate.delete("point:balance:" + userId);
+
+        log.info("超卖场景兑换成功，userId={}，awardId={}，剩余库存={}",
+                userId, awardId, remaining);
+        return true;
+    }
+
+    /**
+     * 不允许超卖场景：库存拆分 + 乐观锁
+     */
+    private boolean exchangeWithoutOversell(Long userId, Long awardId,
+                                            AwardPO award, Long exchangeId) {
+        // 1. 扣减库存（乐观锁 + 随机路由）
+        boolean stockDeducted = deductInventory(awardId, 5);
+        if (!stockDeducted) {
+            updateExchangeStatus(exchangeId, 2);
+            throw new RuntimeException("库存不足，兑换失败");
+        }
+
+        // 2. 扣减积分
+        boolean pointsDeducted = deductPoints(userId, award.getPointsCost(), 3);
+        if (!pointsDeducted) {
+            updateExchangeStatus(exchangeId, 2);
+            throw new RuntimeException("积分扣减失败，请重试");
+        }
+
+        // 3. 发放奖品
+        UserAwardPO userAward = new UserAwardPO();
+        userAward.setUserId(userId);
+        userAward.setAwardId(awardId);
+        userAward.setExchangeId(exchangeId);
+        userAwardMapper.insert(userAward);
+
+        // 4. 更新兑换记录为成功
+        updateExchangeStatus(exchangeId, 1);
+
+        // 5. 删除积分余额缓存
+        redisTemplate.delete("point:balance:" + userId);
+
+        log.info("强一致性场景兑换成功，userId={}，awardId={}", userId, awardId);
+        return true;
+    }
+
+    /**
+     * 更新兑换记录状态
+     */
+    private void updateExchangeStatus(Long exchangeId, Integer status) {
         ExchangeRecordPO update = new ExchangeRecordPO();
         update.setId(exchangeId);
-        update.setStatus(1);
+        update.setStatus(status);
         exchangeRecordMapper.updateById(update);
-
-        log.info("积分兑换成功，userId={}, awardId={}, exchangeId={}", userId, awardId, exchangeId);
-
-        // 兑换成功后删除余额缓存
-        redisTemplate.delete("point:balance:" + userId);
-        return true;
     }
 
     // 随机路由扣减子库存，乐观锁重试
