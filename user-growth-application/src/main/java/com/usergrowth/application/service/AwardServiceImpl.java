@@ -7,6 +7,7 @@ import com.usergrowth.infrastructure.po.*;
 import com.usergrowth.infrastructure.util.SnowflakeIdGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +27,7 @@ public class AwardServiceImpl implements AwardService {
     private final UserAwardMapper userAwardMapper;
     private final PointAccountMapper pointAccountMapper;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
     public List<AwardVO> getRewardList() {
@@ -111,6 +113,9 @@ public class AwardServiceImpl implements AwardService {
         exchangeRecordMapper.updateById(update);
 
         log.info("积分兑换成功，userId={}, awardId={}, exchangeId={}", userId, awardId, exchangeId);
+
+        // 兑换成功后删除余额缓存
+        redisTemplate.delete("point:balance:" + userId);
         return true;
     }
 
