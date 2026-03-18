@@ -13,8 +13,10 @@ import com.usergrowth.infrastructure.po.PointFlowPO;
 import com.usergrowth.infrastructure.po.TaskPO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.github.benmanes.caffeine.cache.Cache;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -32,27 +34,34 @@ public class TaskServiceImpl implements TaskService {
     private final TaskRecordMapper taskRecordMapper;
     private final PointAccountMapper pointAccountMapper;
     private final PointFlowMapper pointFlowMapper;
+    private final Cache<String, Object> taskListCache;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
     public List<TaskVO> queryTaskList(Long userId) {
-        // 1. 查询所有启用的任务
-        List<TaskPO> taskList = taskMapper.selectList(
-                new LambdaQueryWrapper<TaskPO>()
-                        .eq(TaskPO::getStatus, 1)
-                        .orderByAsc(TaskPO::getId)
-        );
+        // 1. 任务配置从 Caffeine 本地缓存获取（5分钟过期）
+        String cacheKey = "task:list:all";
+        @SuppressWarnings("unchecked")
+        List<TaskPO> taskList = (List<TaskPO>) taskListCache.get(cacheKey, k -> {
+            log.info("任务列表缓存未命中，从数据库加载");
+            return taskMapper.selectList(
+                    new LambdaQueryWrapper<TaskPO>()
+                            .eq(TaskPO::getStatus, 1)
+                            .orderByAsc(TaskPO::getId)
+            );
+        });
 
-        // 2. 查询今天已完成的任务ID（用于 DAILY 任务判断）
+        // 2. 今天已完成的任务ID（DAILY 任务用）
         Set<Integer> todayCompletedIds = new HashSet<>(
                 taskRecordMapper.selectCompletedTaskIds(userId, LocalDate.now())
         );
 
-        // 3. 查询历史上完成过的任务ID（用于 DAILY 任务判断）
+        // 3. 历史完成的任务ID（ONE_TIME 任务用）
         Set<Integer> allCompletedIds = new HashSet<>(
                 taskRecordMapper.selectAllCompletedTaskIds(userId)
         );
 
-        // 4. 组装 VO，按任务类型合并完成状态
+        // 4. 组装 VO
         return taskList.stream().map(task -> {
             TaskVO vo = new TaskVO();
             vo.setTaskID(task.getId());
@@ -61,17 +70,14 @@ public class TaskServiceImpl implements TaskService {
             vo.setTaskType(task.getTaskType());
 
             if ("ONE_TIME".equals(task.getTaskType())) {
-                // 一次性任务：历史上完成过就标记 COMPLETED
                 vo.setTaskStatus(allCompletedIds.contains(task.getId())
                         ? TaskStatusEnum.COMPLETED.getCode()
                         : TaskStatusEnum.AVAILABLE.getCode());
             } else {
-                // 每日任务（DAILY）：只看今天
                 vo.setTaskStatus(todayCompletedIds.contains(task.getId())
                         ? TaskStatusEnum.COMPLETED.getCode()
                         : TaskStatusEnum.AVAILABLE.getCode());
             }
-
             return vo;
         }).collect(Collectors.toList());
     }
@@ -128,6 +134,12 @@ public class TaskServiceImpl implements TaskService {
         flow.setPointsEarned(task.getPointsReward());
         flow.setCompletedAt(LocalDateTime.now());
         pointFlowMapper.insert(flow);
+
+        log.info("任务完成，积分发放成功，userId={}, taskId={}, points={}",
+                userId, taskId, task.getPointsReward());
+
+        // 7. 积分变动后删除余额缓存，保证下次查询读最新值
+        redisTemplate.delete("point:balance:" + userId);
 
         log.info("任务完成，积分发放成功，userId={}, taskId={}, points={}",
                 userId, taskId, task.getPointsReward());
