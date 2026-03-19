@@ -1,11 +1,17 @@
 package com.usergrowth.trigger.http;
 
 import com.usergrowth.api.common.R;
+import com.usergrowth.api.dto.CompleteTaskRequest;
 import com.usergrowth.api.dto.TaskVO;
 import com.usergrowth.application.service.TaskService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -13,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @Slf4j
+@Validated
 @RestController
 @RequiredArgsConstructor
 public class TaskController {
@@ -21,26 +28,26 @@ public class TaskController {
 
     /**
      * 获取任务列表
-     * GET /api/task/list
-     * 暂时用 userId 请求参数模拟用户上下文，后续接入登录体系后替换
+     * GET /api/task/list?userId=
      */
     @GetMapping("/api/task/list")
-    public R<List<TaskVO>> getTaskList(@RequestParam Long userId) {
+    public R<List<TaskVO>> getTaskList(
+            @RequestParam
+            @NotNull(message = "用户ID不能为空")
+            @Min(value = 1, message = "用户ID必须大于0")
+            Long userId) {
         return R.ok(taskService.queryTaskList(userId));
     }
-    //接口一：获取任务列表
-    //GET http://localhost:8080/api/task/list?userId=1001
 
     /**
      * 完成任务上报
      * POST /api/task/complete
      */
     @PostMapping("/api/task/complete")
-    public R<Boolean> completeTask(@RequestParam Long userId,
-                                   @RequestParam Integer taskId,
-                                   @RequestParam(required = false, defaultValue = "") String targetId) {
-        return R.ok(taskService.completeTask(userId, taskId, targetId));
+    public R<Boolean> completeTask(@Valid @ModelAttribute CompleteTaskRequest request) {
+        return R.ok(taskService.completeTask(
+                request.getUserId(),
+                request.getTaskId(),
+                request.getTargetId()));
     }
-    //接口二：完成任务上报
-    //POST http://localhost:8080/api/task/complete?userId=1001&taskId=1
 }
