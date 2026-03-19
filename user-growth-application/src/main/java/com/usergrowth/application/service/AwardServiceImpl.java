@@ -2,7 +2,9 @@ package com.usergrowth.application.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.usergrowth.api.dto.AwardVO;
+import com.usergrowth.api.dto.ExchangeMessage;
 import com.usergrowth.infrastructure.mapper.*;
+import com.usergrowth.infrastructure.mq.ExchangeTransactionProducer;
 import com.usergrowth.infrastructure.po.*;
 import com.usergrowth.infrastructure.redis.AwardStockRedisService;
 import com.usergrowth.infrastructure.util.SnowflakeIdGenerator;
@@ -30,6 +32,7 @@ public class AwardServiceImpl implements AwardService {
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final RedisTemplate<String, Object> redisTemplate;
     private final AwardStockRedisService awardStockRedisService;
+    private final ExchangeTransactionProducer transactionProducer;
 
     @Override
     public List<AwardVO> getRewardList() {
@@ -213,5 +216,46 @@ public class AwardServiceImpl implements AwardService {
             if (affected > 0) return true;
         }
         return false;
+    }
+
+    /**
+     * 异步兑换：MQ 事务消息，立即返回，消费者异步处理
+     */
+    public boolean exchangeAsync(Long userId, Long awardId) {
+        // 1. 查询奖品
+        AwardPO award = awardMapper.selectById(awardId);
+        if (award == null || award.getStatus() != 1) {
+            throw new RuntimeException("奖品不存在或已下架");
+        }
+
+        // 2. 有效期校验
+        if (award.getExpireTime() != null
+                && LocalDateTime.now().isAfter(award.getExpireTime())) {
+            throw new RuntimeException("活动已结束");
+        }
+
+        // 3. 积分余额预检（快速失败，非精确）
+        PointAccountPO account = pointAccountMapper.selectByUserId(userId);
+        if (account == null || account.getBalance() < award.getPointsCost()) {
+            throw new RuntimeException("积分不足");
+        }
+
+        // 4. 构建 MQ 消息
+        ExchangeMessage message = new ExchangeMessage();
+        message.setExchangeId(snowflakeIdGenerator.nextId());
+        message.setUserId(userId);
+        message.setAwardId(awardId);
+        message.setPointsCost(award.getPointsCost());
+        message.setAllowOversell(award.getAllowOversell());
+
+        // 5. 发送事务消息（内部执行本地事务：插入 exchange_record）
+        boolean sent = transactionProducer.sendTransactionMessage(message);
+        if (!sent) {
+            throw new RuntimeException("兑换请求提交失败，请重试");
+        }
+
+        log.info("兑换请求已提交MQ，exchangeId={}，请等待处理结果",
+                message.getExchangeId());
+        return true;
     }
 }
