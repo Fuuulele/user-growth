@@ -7,5 +7,6 @@ public interface AwardService {
 
     List<AwardVO> getRewardList();
     boolean exchange(Long userId, Long awardId);
+    boolean exchangeAsync(Long userId, Long awardId);
 
 }
