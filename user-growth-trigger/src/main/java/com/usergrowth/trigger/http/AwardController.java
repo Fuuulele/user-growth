@@ -40,4 +40,15 @@ public class AwardController {
                 request.getUserId(),
                 request.getAwardId()));
     }
+
+    /**
+     * 积分兑换（异步MQ版）
+     * POST /api/award/exchange/async
+     */
+    @PostMapping("/api/award/exchange/async")
+    public R<Boolean> exchangeAsync(@Valid @ModelAttribute ExchangeRequest request) {
+        return R.ok(awardService.exchangeAsync(
+                request.getUserId(),
+                request.getAwardId()));
+    }
 }
