@@ -13,7 +13,13 @@ spring:
       port: 6379
       database: 0
   autoconfigure:
-    exclude: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
+    exclude:
+
+rocketmq:
+  name-server: localhost:9876
+  producer:
+      group: user-growth-producer-group
+      send-message-timeout: 3000
 
 mybatis-plus:
   configuration:
