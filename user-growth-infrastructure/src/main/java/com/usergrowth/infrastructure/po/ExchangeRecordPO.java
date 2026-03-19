@@ -19,8 +19,8 @@ public class ExchangeRecordPO {
     private Integer status;
     private Integer pointsCost;
 
-    @TableField("create_at")
+    @TableField("created_at")
     private LocalDateTime createdAt;
-    @TableField("update_at")
+    @TableField("updated_at")
     private LocalDateTime updatedAt;
 }
