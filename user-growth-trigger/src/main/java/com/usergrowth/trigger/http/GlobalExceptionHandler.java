@@ -1,18 +1,23 @@
 package com.usergrowth.trigger.http;
 
 import com.usergrowth.api.common.R;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+
+import java.util.stream.Collectors;
 
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     /**
-     * 业务异常：积分不足、库存不足、任务不存在等
+     * 业务异常：积分不足、库存不足等
      */
     @ExceptionHandler(RuntimeException.class)
     public R<Void> handleRuntimeException(RuntimeException e) {
@@ -21,7 +26,33 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 缺少必填参数：userId 未传等
+     * @Valid 校验失败：DTO 对象字段校验不通过
+     * 适用于 @RequestBody 或 @ModelAttribute
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public R<Void> handleValidException(MethodArgumentNotValidException e) {
+        String message = e.getBindingResult().getFieldErrors().stream()
+                .map(error -> error.getField() + "：" + error.getDefaultMessage())
+                .collect(Collectors.joining("；"));
+        log.warn("参数校验失败：{}", message);
+        return R.fail(400, message);
+    }
+
+    /**
+     * @Validated 单个参数校验失败
+     * 适用于 @RequestParam 上直接加注解的场景
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public R<Void> handleConstraintViolation(ConstraintViolationException e) {
+        String message = e.getConstraintViolations().stream()
+                .map(ConstraintViolation::getMessage)
+                .collect(Collectors.joining("；"));
+        log.warn("参数约束违反：{}", message);
+        return R.fail(400, message);
+    }
+
+    /**
+     * 缺少必填参数
      */
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public R<Void> handleMissingParam(MissingServletRequestParameterException e) {
@@ -30,7 +61,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 参数类型不匹配：userId 传了 "abc" 等
+     * 参数类型不匹配
      */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public R<Void> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
@@ -48,7 +79,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 兜底异常：未知系统错误，不暴露细节
+     * 兜底异常
      */
     @ExceptionHandler(Exception.class)
     public R<Void> handleException(Exception e) {
