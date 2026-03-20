@@ -23,8 +23,8 @@
 | ORM | MyBatis-Plus 3.5.7 |
 | 数据库 | MySQL 8.0 |
 | 缓存 | Redis 7.x + Caffeine 3.x |
-| 消息队列 | RocketMQ 5.x（预留） |
-| 分布式ID | 雪花算法（自研） |
+| 消息队列 | RocketMQ 5.x |
+| 分布式ID | 雪花算法 |
 | 构建工具 | Maven 3.9 |
 | JDK | Java 21 |
 
