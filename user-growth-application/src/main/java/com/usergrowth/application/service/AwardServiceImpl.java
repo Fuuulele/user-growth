@@ -3,6 +3,7 @@ package com.usergrowth.application.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.usergrowth.api.dto.AwardVO;
 import com.usergrowth.api.dto.ExchangeMessage;
+import com.usergrowth.api.dto.ExchangeResultVO;
 import com.usergrowth.infrastructure.mapper.*;
 import com.usergrowth.infrastructure.mq.ExchangeTransactionProducer;
 import com.usergrowth.infrastructure.po.*;
@@ -257,5 +258,35 @@ public class AwardServiceImpl implements AwardService {
         log.info("兑换请求已提交MQ，exchangeId={}，请等待处理结果",
                 message.getExchangeId());
         return true;
+    }
+
+    @Override
+    public ExchangeResultVO getExchangeResult(Long exchangeId) {
+        // 1. 查询兑换记录
+        ExchangeRecordPO record = exchangeRecordMapper.selectById(exchangeId);
+        if (record == null) {
+            throw new RuntimeException("兑换记录不存在，exchangeId=" + exchangeId);
+        }
+
+        // 2. 查询奖品名称
+        AwardPO award = awardMapper.selectById(record.getAwardId());
+
+        // 3. 组装 VO
+        ExchangeResultVO vo = new ExchangeResultVO();
+        vo.setExchangeId(String.valueOf(record.getId()));
+        vo.setPointsCost(record.getPointsCost());
+        vo.setCreatedAt(record.getCreatedAt() != null
+                ? record.getCreatedAt().toString() : "");
+        vo.setAwardName(award != null ? award.getRewardName() : "未知奖品");
+
+        // 4. 状态转换
+        switch (record.getStatus()) {
+            case 0 -> vo.setStatus("PENDING");
+            case 1 -> vo.setStatus("SUCCESS");
+            case 2 -> vo.setStatus("FAIL");
+            default -> vo.setStatus("UNKNOWN");
+        }
+
+        return vo;
     }
 }
