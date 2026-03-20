@@ -3,18 +3,19 @@ package com.usergrowth.trigger.http;
 import com.usergrowth.api.common.R;
 import com.usergrowth.api.dto.AwardVO;
 import com.usergrowth.api.dto.ExchangeRequest;
+import com.usergrowth.api.dto.ExchangeResultVO;
 import com.usergrowth.application.service.AwardService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.ModelAttribute;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 @Slf4j
+@Validated
 @RestController
 @RequiredArgsConstructor
 public class AwardController {
@@ -50,5 +51,17 @@ public class AwardController {
         return R.ok(awardService.exchangeAsync(
                 request.getUserId(),
                 request.getAwardId()));
+    }
+
+    /**
+     * 查询兑换结果（用于异步兑换后轮询）
+     * GET /api/award/exchange/result
+     */
+    @GetMapping("/api/award/exchange/result")
+    public R<ExchangeResultVO> getExchangeResult(
+            @RequestParam
+            @NotNull(message = "兑换ID不能为空")
+            Long exchangeId) {
+        return R.ok(awardService.getExchangeResult(exchangeId));
     }
 }
