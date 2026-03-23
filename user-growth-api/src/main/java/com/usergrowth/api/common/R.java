@@ -34,4 +34,12 @@ public class R<T>  {
         return r;
     }
 
+    public static <T> R<T> tooManyRequests(String message) {
+        R<T> r = new R<>();
+        r.code = 429;
+        r.message = message;
+        r.data = null;
+        return r;
+    }
+
 }
