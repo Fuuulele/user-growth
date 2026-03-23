@@ -11,6 +11,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import com.alibaba.csp.sentinel.annotation.SentinelResource;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
 
 import java.util.List;
 
@@ -36,6 +38,9 @@ public class AwardController {
      * POST /api/award/exchange
      */
     @PostMapping("/api/award/exchange")
+    @SentinelResource(value = "exchange",
+            blockHandler = "exchangeBlockHandler",
+            fallback = "exchangeFallback")
     public R<Boolean> exchange(@Valid @ModelAttribute ExchangeRequest request) {
         return R.ok(awardService.exchange(
                 request.getUserId(),
@@ -47,6 +52,9 @@ public class AwardController {
      * POST /api/award/exchange/async
      */
     @PostMapping("/api/award/exchange/async")
+    @SentinelResource(value = "exchangeAsync",
+            blockHandler = "exchangeBlockHandler",
+            fallback = "exchangeFallback")
     public R<Boolean> exchangeAsync(@Valid @ModelAttribute ExchangeRequest request) {
         return R.ok(awardService.exchangeAsync(
                 request.getUserId(),
@@ -63,5 +71,27 @@ public class AwardController {
             @NotNull(message = "兑换ID不能为空")
             Long exchangeId) {
         return R.ok(awardService.getExchangeResult(exchangeId));
+    }
+
+    /**
+     * 限流处理：触发 QPS 限制时调用
+     * 参数列表必须与原方法一致，最后加 BlockException
+     */
+    public R<Boolean> exchangeBlockHandler(ExchangeRequest request, BlockException e) {
+        return R.fail(429, "活动太火爆了，请稍后再试～");
+    }
+
+    /**
+     * 降级处理：业务异常触发熔断时调用
+     * 参数列表必须与原方法一致，最后加 Throwable
+     */
+    public R<Boolean> exchangeFallback(ExchangeRequest request, Throwable t) {
+        // BlockException 由 blockHandler 处理，这里只处理业务异常
+        if (t instanceof com.alibaba.csp.sentinel.slots.block.BlockException) {
+            return R.fail(429, "活动太火爆了，请稍后再试～");
+        }
+        log.error("兑换服务降级，userId={}, awardId={}, 异常={}",
+                request.getUserId(), request.getAwardId(), t.getMessage());
+        return R.fail(503, "兑换服务暂时不可用，请稍后再试～");
     }
 }
