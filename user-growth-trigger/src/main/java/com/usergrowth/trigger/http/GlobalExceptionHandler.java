@@ -9,6 +9,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
 
 import java.util.stream.Collectors;
 
@@ -85,5 +86,15 @@ public class GlobalExceptionHandler {
     public R<Void> handleException(Exception e) {
         log.error("系统异常：", e);
         return R.fail(500, "系统繁忙，请稍后再试");
+    }
+
+    /**
+     * Sentinel 限流/熔断异常兜底
+     * 当 blockHandler 方法签名不匹配时会走这里
+     */
+    @ExceptionHandler(BlockException.class)
+    public R<Void> handleBlockException(BlockException e) {
+        log.warn("Sentinel 触发限流或熔断：{}", e.getMessage());
+        return R.fail(429, "系统繁忙，请稍后再试～");
     }
 }
